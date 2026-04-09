@@ -359,11 +359,11 @@ def analyze_clips_with_ai(video_path: str, num_clips: int, clip_duration: int) -
 
 
 # ====================== REFRAME WITH FACE DETECTION ======================
-# Menggunakan OpenCV Haar Cascade (built-in, tanpa mediapipe)
+# OpenCV Haar Cascade — ringan dan kompatibel di semua platform
 _face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 def reframe_clip(input_path: str, output_path: str):
-    """Reframe video to 9:16 dengan face-tracking crop menggunakan OpenCV."""
+    """Reframe video ke 9:16 dengan smooth face-tracking crop."""
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -375,39 +375,64 @@ def reframe_clip(input_path: str, output_path: str):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (1080, 1920))
 
-    smooth_x = (w - crop_w) // 2
-    alpha = 0.1  # smoothing factor
+    # Posisi awal di tengah
+    smooth_x = float((w - crop_w) // 2)
+    target_x = smooth_x
+
+    # Smoothing: semakin kecil alpha, semakin lambat & mulus gerakannya
+    # 0.02 = sangat halus (lambat), 0.1 = cukup responsif
+    alpha = 0.04
+
+    # Deteksi wajah setiap N frame untuk performa
+    DETECT_EVERY = 8
     frame_count = 0
+    last_faces = []
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        target_x = (w - crop_w) // 2
-
-        # Deteksi wajah setiap 5 frame agar lebih ringan
-        if frame_count % 5 == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Deteksi wajah hanya setiap DETECT_EVERY frame
+        if frame_count % DETECT_EVERY == 0:
+            small = cv2.resize(frame, (w // 2, h // 2))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)  # normalisasi pencahayaan
             faces = _face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+                gray,
+                scaleFactor=1.2,
+                minNeighbors=6,
+                minSize=(20, 20),
+                flags=cv2.CASCADE_SCALE_IMAGE
             )
+            # Skala balik ke resolusi asli
             if len(faces) > 0:
-                # Ambil wajah terbesar
-                faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
-                x_f, y_f, w_f, h_f = faces[0]
-                center_x = x_f + w_f // 2
-                target_x = max(0, min(center_x - crop_w // 2, w - crop_w))
+                last_faces = [(x*2, y*2, fw*2, fh*2) for (x, y, fw, fh) in faces]
+            # Jika tidak ada wajah, pertahankan last_faces (jangan reset ke kosong)
+            # sehingga kamera tidak loncat ke tengah tiba-tiba
 
-        frame_count += 1
+        # Hitung target_x dari wajah terakhir yang diketahui
+        if len(last_faces) > 0:
+            # Ambil wajah terbesar
+            biggest = max(last_faces, key=lambda f: f[2] * f[3])
+            x_f, y_f, w_f, h_f = biggest
+            face_center = x_f + w_f // 2
+            # Offset sedikit ke atas agar wajah tidak terlalu di bawah frame
+            new_target = face_center - crop_w // 2
+            new_target = max(0, min(new_target, w - crop_w))
+            # Update target hanya jika perubahan cukup signifikan (>5% lebar crop)
+            # Ini mencegah micro-jitter dari deteksi yang tidak stabil
+            if abs(new_target - target_x) > crop_w * 0.05:
+                target_x = float(new_target)
 
-        # Smooth camera movement
-        smooth_x = int(smooth_x * (1 - alpha) + target_x * alpha)
+        # Exponential moving average untuk gerakan kamera yang sangat mulus
+        smooth_x = smooth_x * (1 - alpha) + target_x * alpha
         smooth_x = max(0, min(smooth_x, w - crop_w))
 
-        cropped = frame[:, smooth_x:smooth_x + crop_w]
+        cropped = frame[:, int(smooth_x):int(smooth_x) + crop_w]
         resized = cv2.resize(cropped, (1080, 1920))
         out.write(resized)
+        frame_count += 1
 
     cap.release()
     out.release()
