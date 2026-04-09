@@ -743,63 +743,82 @@ if st.session_state.analyzed_clips:
 
 # ─── STEP 6: SIMPAN HASIL ────────────────────────────────────
 if st.session_state.processing_done and st.session_state.processed_clips:
+    import zipfile, io
+
     st.divider()
     st.markdown('<div class="step-header"><span class="step-badge">6</span>Simpan Hasil</div>', unsafe_allow_html=True)
 
-    col_dir, col_prefix = st.columns(2)
-    with col_dir:
-        save_folder = st.text_input(
-            "📁 Folder penyimpanan",
-            value=str(Path.home() / "clippergroq_output")
-        )
-    with col_prefix:
-        filename_prefix = st.text_input("✏️ Prefix nama file", value="clip")
+    # Prefix nama file
+    filename_prefix = st.text_input("✏️ Prefix nama file", value="clip",
+                                    help="Contoh: 'viral' → viral_01_Judul.mp4")
 
-    st.markdown("**📋 Preview nama file:**")
+    def make_fname(i, clip):
+        safe = re.sub(r'[^\w\s-]', '', clip['title']).strip().replace(' ', '_')[:30]
+        return f"{filename_prefix}_{i:02d}_{safe}.mp4"
+
+    st.markdown("**📋 Clip siap didownload:**")
+
+    # ── Download per clip ──
     for i, clip in enumerate(st.session_state.processed_clips, 1):
-        safe_title = re.sub(r'[^\w\s-]', '', clip['title']).strip().replace(' ', '_')[:30]
-        fname      = f"{filename_prefix}_{i:02d}_{safe_title}.mp4"
-        dur        = clip['end'] - clip['start']
-        st.caption(f"`{fname}` — {dur:.1f}s — bahasa: {clip.get('language', '?')}")
+        src  = Path(clip["output_path"])
+        dur  = clip['end'] - clip['start']
+        lang = clip.get('language', '?')
+        fname = make_fname(i, clip)
 
-    col_save, col_dl = st.columns(2)
-
-    with col_save:
-        if st.button("💾 Simpan ke Folder", type="primary"):
-            out_dir = Path(save_folder)
-            try:
-                out_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                st.error(f"❌ Gagal buat folder: {e}")
-                st.stop()
-            saved = 0
-            for i, clip in enumerate(st.session_state.processed_clips, 1):
-                src = Path(clip["output_path"])
-                if not src.exists():
-                    st.warning(f"⚠️ Clip {i} tidak ditemukan.")
-                    continue
-                safe_title = re.sub(r'[^\w\s-]', '', clip['title']).strip().replace(' ', '_')[:30]
-                dst = out_dir / f"{filename_prefix}_{i:02d}_{safe_title}.mp4"
-                shutil.copy2(str(src), str(dst))
-                saved += 1
-                st.success(f"✅ `{dst.name}` disimpan")
-            if saved:
-                st.balloons()
-                st.success(f"🎉 {saved} clip disimpan di `{save_folder}`")
-
-    with col_dl:
-        st.markdown("**⬇️ Download:**")
-        for i, clip in enumerate(st.session_state.processed_clips, 1):
-            src = Path(clip["output_path"])
+        col_info, col_btn = st.columns([8, 2])
+        with col_info:
+            st.markdown(
+                f'<div class="clip-card" style="padding:10px;">'
+                f'<b>Clip {i}: {clip["title"]}</b><br>'
+                f'<small>⏱ {dur:.1f}s &nbsp;|&nbsp; 🌐 {lang} &nbsp;|&nbsp; 📄 {fname}</small>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
             if src.exists():
-                safe_title = re.sub(r'[^\w\s-]', '', clip['title']).strip().replace(' ', '_')[:30]
-                fname      = f"{filename_prefix}_{i:02d}_{safe_title}.mp4"
                 with open(src, "rb") as f:
                     st.download_button(
-                        label=f"⬇️ Clip {i}: {clip['title'][:28]}",
-                        data=f, file_name=fname,
-                        mime="video/mp4", key=f"dl_{i}"
+                        label=f"⬇️ Download",
+                        data=f,
+                        file_name=fname,
+                        mime="video/mp4",
+                        key=f"dl_{i}",
+                        use_container_width=True
                     )
+            else:
+                st.caption("❌ File tidak ada")
+
+    st.divider()
+
+    # ── Download semua sebagai ZIP ──
+    st.markdown("**📦 Download Semua Sekaligus (ZIP):**")
+
+    existing_clips = [
+        (i, clip) for i, clip in enumerate(st.session_state.processed_clips, 1)
+        if Path(clip["output_path"]).exists()
+    ]
+
+    if existing_clips:
+        with st.spinner("📦 Menyiapkan file ZIP..."):
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zf:
+                for i, clip in existing_clips:
+                    fname = make_fname(i, clip)
+                    zf.write(clip["output_path"], arcname=fname)
+            zip_buffer.seek(0)
+
+        st.download_button(
+            label=f"📦 Download Semua ({len(existing_clips)} clip) sebagai ZIP",
+            data=zip_buffer,
+            file_name=f"{filename_prefix}_semua_clip.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True
+        )
+        st.caption("💡 Setelah download ZIP, extract dan semua clip langsung tersedia.")
+    else:
+        st.warning("⚠️ Tidak ada file clip yang tersedia.")
 
 st.divider()
 st.caption("🎬 RANTONB Clipper 1.0 • Whisper Large v3 Turbo + LLaMA 3.3 70B • Face Detection by OpenCV")
