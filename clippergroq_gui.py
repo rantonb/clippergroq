@@ -43,6 +43,7 @@ SESSION_DEFAULTS = {
     "processed_clips": [],
     "processing_done": False,
     "deleted_clips": [],
+    "generated_captions": {},
 }
 for key, default in SESSION_DEFAULTS.items():
     if key not in st.session_state:
@@ -323,6 +324,51 @@ def analyze_clips_with_ai(video_path: str, num_clips: int, clip_duration: int) -
     return valid_clips[:num_clips]
 
 
+# ====================== CAPTION GENERATOR ======================
+
+def generate_captions_for_clips(clips: list, language: str) -> dict:
+    """Generate title, description, hashtags for each clip."""
+    lang_instruction = (
+        "Respond entirely in Indonesian (Bahasa Indonesia)."
+        if language == "id"
+        else "Respond entirely in English."
+    )
+    results = {}
+    for i, clip in enumerate(clips):
+        prompt = (
+            f"Kamu adalah social media copywriter profesional yang ahli membuat konten viral.\n\n"
+            f"{lang_instruction}\n\n"
+            f"Buat caption lengkap untuk short video clip berikut:\n"
+            f"- Judul clip: {clip['title']}\n"
+            f"- Durasi: {clip['end'] - clip['start']:.0f} detik\n"
+            f"- Konteks: {clip['reason']}\n\n"
+            f"Buat dalam format JSON berikut (HANYA JSON, tanpa teks lain, tanpa backtick):\n"
+            + '{"title": "<judul menarik max 60 karakter>", "description": "<deskripsi 2-3 kalimat engaging + CTA>", "hashtags": "<10-15 hashtag relevan dipisah spasi>"}'
+        )
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=500
+            )
+            raw = response.choices[0].message.content.strip()
+            raw_clean = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+            json_match = re.search(r"\{.*\}", raw_clean, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                results[i] = {
+                    "title":       data.get("title", clip["title"]),
+                    "description": data.get("description", ""),
+                    "hashtags":    data.get("hashtags", ""),
+                }
+            else:
+                results[i] = {"title": clip["title"], "description": "", "hashtags": ""}
+        except Exception as e:
+            results[i] = {"title": clip["title"], "description": f"(Gagal: {e})", "hashtags": ""}
+    return results
+
+
 # ====================== REFRAME ======================
 _face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
@@ -551,10 +597,11 @@ with col2:
 if st.button("🤖 Analisis & Tentukan Clip Terbaik", type="primary"):
     clips = analyze_clips_with_ai(st.session_state.video_path, num_clips, clip_duration)
     if clips:
-        st.session_state.analyzed_clips  = clips
-        st.session_state.processed_clips = []
-        st.session_state.processing_done = False
-        st.session_state.deleted_clips   = []
+        st.session_state.analyzed_clips    = clips
+        st.session_state.processed_clips   = []
+        st.session_state.processing_done   = False
+        st.session_state.deleted_clips     = []
+        st.session_state.generated_captions = {}
         st.success(f"✅ AI menemukan {len(clips)} clip terbaik!")
 
 st.divider()
@@ -591,6 +638,56 @@ if st.session_state.analyzed_clips:
                     st.rerun()
 
         st.info(f"📋 **{len(active_clips)} clip** akan diproses.")
+
+    st.divider()
+
+    # ─── STEP 3b: AUTO CAPTION ───────────────────────────────
+    st.markdown('<div class="step-header"><span class="step-badge">3b</span>Auto Generate Caption</div>', unsafe_allow_html=True)
+    st.caption("Generate title, deskripsi, dan hashtag untuk setiap clip — tinggal copy paste ke TikTok/YouTube/Instagram.")
+
+    col_lang, col_genbtn = st.columns([3, 2])
+    with col_lang:
+        caption_lang = st.selectbox(
+            "🌐 Bahasa Caption",
+            ["Indonesia 🇮🇩", "English 🇺🇸"],
+            key="caption_lang_select"
+        )
+        caption_lang_code = "id" if "Indonesia" in caption_lang else "en"
+
+    with col_genbtn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("✨ Generate Caption Semua Clip", type="primary", use_container_width=True):
+            clips_to_caption = [
+                clip for i, clip in enumerate(st.session_state.analyzed_clips)
+                if i not in st.session_state.deleted_clips
+            ]
+            with st.spinner("✍️ AI sedang menulis caption..."):
+                captions = generate_captions_for_clips(clips_to_caption, caption_lang_code)
+            st.session_state.generated_captions = captions
+            st.success("✅ Caption berhasil di-generate!")
+            st.rerun()
+
+    # Tampilkan hasil caption
+    if st.session_state.generated_captions:
+        active_for_caption = [
+            (idx, clip) for idx, (i, clip) in enumerate(
+                [(i, c) for i, c in enumerate(st.session_state.analyzed_clips)
+                 if i not in st.session_state.deleted_clips]
+            )
+        ]
+        for cap_idx, clip in active_for_caption:
+            cap = st.session_state.generated_captions.get(cap_idx, {})
+            if not cap:
+                continue
+            with st.expander(f"📋 Caption Clip {cap_idx+1}: {clip['title']}", expanded=True):
+                st.markdown("**🎯 Title:**")
+                st.code(cap.get("title", ""), language=None)
+
+                st.markdown("**📝 Deskripsi:**")
+                st.code(cap.get("description", ""), language=None)
+
+                st.markdown("**#️⃣ Hashtag:**")
+                st.code(cap.get("hashtags", ""), language=None)
 
     st.divider()
 
