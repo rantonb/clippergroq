@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 
 from groq import Groq
 from dotenv import load_dotenv, set_key
@@ -360,9 +359,11 @@ def analyze_clips_with_ai(video_path: str, num_clips: int, clip_duration: int) -
 
 
 # ====================== REFRAME WITH FACE DETECTION ======================
+# Menggunakan OpenCV Haar Cascade (built-in, tanpa mediapipe)
+_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 def reframe_clip(input_path: str, output_path: str):
-    """Reframe video to 9:16 with face-tracking crop."""
+    """Reframe video to 9:16 dengan face-tracking crop menggunakan OpenCV."""
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -376,35 +377,40 @@ def reframe_clip(input_path: str, output_path: str):
 
     smooth_x = (w - crop_w) // 2
     alpha = 0.1  # smoothing factor
+    frame_count = 0
 
-    with mp.solutions.face_detection.FaceDetection(
-        model_selection=1, min_detection_confidence=0.5
-    ) as face_detector:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = face_detector.process(rgb)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-            target_x = (w - crop_w) // 2
-            if results.detections:
-                det = results.detections[0]
-                bbox = det.location_data.relative_bounding_box
-                center_x = int((bbox.xmin + bbox.width / 2) * w)
+        target_x = (w - crop_w) // 2
+
+        # Deteksi wajah setiap 5 frame agar lebih ringan
+        if frame_count % 5 == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = _face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            )
+            if len(faces) > 0:
+                # Ambil wajah terbesar
+                faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
+                x_f, y_f, w_f, h_f = faces[0]
+                center_x = x_f + w_f // 2
                 target_x = max(0, min(center_x - crop_w // 2, w - crop_w))
 
-            # Smooth camera movement
-            smooth_x = int(smooth_x * (1 - alpha) + target_x * alpha)
-            smooth_x = max(0, min(smooth_x, w - crop_w))
+        frame_count += 1
 
-            cropped = frame[:, smooth_x:smooth_x + crop_w]
-            resized = cv2.resize(cropped, (1080, 1920))
-            out.write(resized)
+        # Smooth camera movement
+        smooth_x = int(smooth_x * (1 - alpha) + target_x * alpha)
+        smooth_x = max(0, min(smooth_x, w - crop_w))
+
+        cropped = frame[:, smooth_x:smooth_x + crop_w]
+        resized = cv2.resize(cropped, (1080, 1920))
+        out.write(resized)
 
     cap.release()
     out.release()
-
 
 def burn_subtitle(input_video: str, srt_content: str, output_video: str) -> str | None:
     """Burn SRT subtitle into video."""
