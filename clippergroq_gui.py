@@ -360,8 +360,6 @@ def analyze_clips_with_ai(video_path: str, num_clips: int, clip_duration: int) -
 
 
 # ====================== REFRAME WITH FACE DETECTION ======================
-mp_face_detection = mp.solutions.face_detection
-face_det = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
 def reframe_clip(input_path: str, output_path: str):
     """Reframe video to 9:16 with face-tracking crop."""
@@ -379,27 +377,30 @@ def reframe_clip(input_path: str, output_path: str):
     smooth_x = (w - crop_w) // 2
     alpha = 0.1  # smoothing factor
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_det.process(rgb)
+    with mp.solutions.face_detection.FaceDetection(
+        model_selection=1, min_detection_confidence=0.5
+    ) as face_detector:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_detector.process(rgb)
 
-        target_x = (w - crop_w) // 2
-        if results.detections:
-            det = results.detections[0]
-            bbox = det.location_data.relative_bounding_box
-            center_x = int((bbox.xmin + bbox.width / 2) * w)
-            target_x = max(0, min(center_x - crop_w // 2, w - crop_w))
+            target_x = (w - crop_w) // 2
+            if results.detections:
+                det = results.detections[0]
+                bbox = det.location_data.relative_bounding_box
+                center_x = int((bbox.xmin + bbox.width / 2) * w)
+                target_x = max(0, min(center_x - crop_w // 2, w - crop_w))
 
-        # Smooth camera movement
-        smooth_x = int(smooth_x * (1 - alpha) + target_x * alpha)
-        smooth_x = max(0, min(smooth_x, w - crop_w))
+            # Smooth camera movement
+            smooth_x = int(smooth_x * (1 - alpha) + target_x * alpha)
+            smooth_x = max(0, min(smooth_x, w - crop_w))
 
-        cropped = frame[:, smooth_x:smooth_x + crop_w]
-        resized = cv2.resize(cropped, (1080, 1920))
-        out.write(resized)
+            cropped = frame[:, smooth_x:smooth_x + crop_w]
+            resized = cv2.resize(cropped, (1080, 1920))
+            out.write(resized)
 
     cap.release()
     out.release()
