@@ -1,0 +1,6 @@
+streamlit
+groq
+mediapipe
+opencv-python-headless
+python-dotenv
+yt-dlp
